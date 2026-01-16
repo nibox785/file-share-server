@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package filesearch;
+
+// Service definition
+service FileSearchService {
+    // Tìm kiếm file theo keyword
+    rpc SearchFiles (SearchRequest) returns (SearchResponse);
+    
+    // Lấy thông tin chi tiết file
+    rpc GetFileInfo (FileRequest) returns (FileInfo);
+    
+    // Lấy danh sách tất cả file
+    rpc ListAllFiles (Empty) returns (FileList);
+}
+
+// Request để search
+message SearchRequest {
+    string keyword = 1;
+    int32 limit = 2;  // Giới hạn số kết quả
+}
+
+// Response chứa danh sách file
+message SearchResponse {
+    repeated FileInfo files = 1;
+    int32 total_count = 2;
+}
+
+// Request lấy thông tin 1 file
+message FileRequest {
+    int32 file_id = 1;
+}
+
+// Thông tin chi tiết file
+message FileInfo {
+    int32 id = 1;
+    string filename = 2;
+    string original_filename = 3;
+    int64 file_size = 4;
+    string file_type = 5;
+    string description = 6;
+    bool is_public = 7;
+    int32 download_count = 8;
+    string uploaded_at = 9;
+    int32 owner_id = 10;
+    string owner_username = 11;
+}
+
+// Danh sách file
+message FileList {
+    repeated FileInfo files = 1;
+    int32 total_count = 2;
+}
+
+// Empty message
+message Empty {}

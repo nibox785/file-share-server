@@ -1,0 +1,40 @@
+# --- FastAPI & Web Framework ---
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+websockets==12.0              
+jinja2==3.1.2                
+
+# --- Database (ORM & Async Drivers) ---
+sqlalchemy==2.0.23
+alembic==1.12.1
+pymysql==1.1.0               
+aiomysql==0.2.0                
+aiosqlite==0.19.0               
+
+# --- Authentication & Security ---
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.1
+
+# --- Environment & Config ---
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# --- gRPC (Giao tiếp đa ngôn ngữ) ---
+grpcio==1.59.3
+grpcio-tools==1.59.3
+protobuf==4.25.1
+
+# --- Email & Communication ---
+aiosmtplib==3.0.1
+email-validator==2.1.0
+
+# --- File & Image Processing ---
+aiofiles==23.2.1
+Pillow==10.1.0                  
+
+# --- Testing & HTTP Client ---
+pytest==7.4.3                
+httpx==0.25.2                 

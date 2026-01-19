@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from pydantic import BaseModel
 import shutil
 import os
 from datetime import datetime
@@ -16,6 +17,77 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 
 router = APIRouter()
+
+# ============================================================================
+# NGHIỆP VỤ 0: REGISTER FILE METADATA (sau khi upload TCP)
+# ============================================================================
+
+class FileRegisterRequest(BaseModel):
+    filename: str
+    original_filename: str
+    file_size: int
+    description: Optional[str] = None
+    is_public: bool = False
+
+
+@router.post("/register", response_model=StandardResponse[FileOut])
+def register_file_metadata(
+    payload: FileRegisterRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    NGHIỆP VỤ: Đăng ký metadata file sau khi upload qua TCP
+    - File đã tồn tại trong static/uploads
+    - Lưu metadata vào database để hiển thị ở danh sách
+    """
+
+    file_path = os.path.join(settings.UPLOAD_DIR, payload.filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File không tồn tại trên hệ thống"
+        )
+
+    # Tránh duplicate cho cùng owner + filename
+    existing = db.query(FileModel).filter(
+        FileModel.filename == payload.filename,
+        FileModel.owner_id == current_user.id
+    ).first()
+    if existing:
+        return StandardResponse(
+            success=True,
+            message="File đã được đăng ký trước đó",
+            data=existing
+        )
+
+    file_ext = os.path.splitext(payload.original_filename)[1].lower()
+    if not file_ext:
+        file_ext = os.path.splitext(payload.filename)[1].lower()
+
+    mime_type, _ = mimetypes.guess_type(payload.original_filename)
+
+    new_file = FileModel(
+        filename=payload.filename,
+        original_filename=payload.original_filename,
+        file_path=file_path,
+        file_size=payload.file_size,
+        file_type=file_ext or ".bin",
+        mime_type=mime_type,
+        description=payload.description,
+        is_public=payload.is_public,
+        owner_id=current_user.id
+    )
+
+    db.add(new_file)
+    db.commit()
+    db.refresh(new_file)
+
+    return StandardResponse(
+        success=True,
+        message="Đăng ký metadata thành công",
+        data=new_file
+    )
 
 # ============================================================================
 # NGHIỆP VỤ 1: UPLOAD FILE (HTTP)

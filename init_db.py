@@ -1,44 +1,57 @@
 import sys
-import pymysql
+import os
 from app.db.session import engine, SessionLocal
 from app.db import base
 from app.models.user import User
 from app.core.security import get_password_hash
+from app.core.config import Settings
 
-def check_mysql_connection():
-    """Kiểm tra kết nối MySQL"""
-    try:
-        connection = pymysql.connect(
-            host='localhost',
-            user='root',
-            password='01658919764',
-            charset='utf8mb4'
-        )
-        print("MySQL connection successful!")
-        
-        # Kiểm tra database tồn tại
-        with connection.cursor() as cursor:
-            cursor.execute("SHOW DATABASES LIKE 'file_share'")
-            result = cursor.fetchone()
-            
-            if not result:
-                print("Database 'file_share' not found. Creating...")
-                cursor.execute("CREATE DATABASE file_share CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                print("Database 'file_share' created!")
-            else:
-                print("Database 'file_share' exists!")
-        
-        connection.close()
+settings = Settings()
+
+def check_database_connection():
+    """Kiểm tra kết nối Database (SQLite hoặc MySQL)"""
+    db_url = settings.DATABASE_URL
+    
+    if db_url.startswith("sqlite"):
+        print(f"Using SQLite database")
+        print(f"Database file: {db_url.replace('sqlite:///', '')}")
         return True
-        
-    except pymysql.err.OperationalError as e:
-        print(f"MySQL connection failed: {e}")
-        print("\nPlease check:")
-        print("1. MySQL server is running")
-        print("2. Username: root")
-        print("3. Password: 01658919764")
-        print("4. Port: 3306 (default)")
-        return False
+    elif "mysql" in db_url:
+        try:
+            import pymysql
+            connection = pymysql.connect(
+                host='localhost',
+                user='root',
+                password='01658919764',
+                charset='utf8mb4'
+            )
+            print("MySQL connection successful!")
+            
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW DATABASES LIKE 'file_share'")
+                result = cursor.fetchone()
+                
+                if not result:
+                    print("Database 'file_share' not found. Creating...")
+                    cursor.execute("CREATE DATABASE file_share CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
+                    print("Database 'file_share' created!")
+                else:
+                    print("Database 'file_share' exists!")
+            
+            connection.close()
+            return True
+            
+        except Exception as e:
+            print(f"MySQL connection failed: {e}")
+            print("\nPlease check:")
+            print("1. MySQL server is running")
+            print("2. Username: root")
+            print("3. Password: correct")
+            print("4. Port: 3306 (default)")
+            return False
+    else:
+        print(f"Using database: {db_url}")
+        return True
 
 def init_database():
     """Tạo tất cả tables"""
@@ -138,20 +151,21 @@ def show_database_info():
     print("\n" + "="*60)
     print(" Database Information")
     print("="*60)
-    print(f"Database: file_share")
-    print(f"Host: localhost")
-    print(f"User: root")
-    print(f"Charset: utf8mb4")
-    print(f"Connection URL: mysql+pymysql://root:***@localhost/file_share")
+    db_url = settings.DATABASE_URL
+    if db_url.startswith("sqlite"):
+        print(f"Database Type: SQLite")
+        print(f"Database File: {db_url.replace('sqlite:///', '')}")
+    else:
+        print(f"Database URL: {db_url}")
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print(" Initializing File Share Network Database (MySQL)")
+    print(" Initializing File Share Network Database")
     print("="*60)
     
-    # Bước 1: Kiểm tra MySQL connection
-    if not check_mysql_connection():
-        print("\n Cannot connect to MySQL. Please check your configuration.")
+    # Bước 1: Kiểm tra database connection
+    if not check_database_connection():
+        print("\n Cannot connect to database. Please check your configuration.")
         sys.exit(1)
     
     # Bước 2: Tạo tables

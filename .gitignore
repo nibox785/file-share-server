@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+*.so
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment files
+.env
+
+# SSL certificates (generated)
+ssl_certs/
+
+# App data / uploads
+static/uploads/
+
+# Local databases and artifacts
+*.db
+*.sqlite3
+network_app.db
+received_stream.mp3
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

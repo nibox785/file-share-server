@@ -162,15 +162,8 @@ class TCPFileClient:
 if __name__ == "__main__":
     print("=== TCP File Transfer Client ===\n")
     
-    # Try to load config from client_config.py
-    try:
-        from client_config import SERVER_IP, get_tcp_config
-        default_host = SERVER_IP
-        print(f"Loaded server config: {SERVER_IP}")
-    except ImportError:
-        default_host = 'localhost'
-        print("No config found. Using localhost.")
-        print("   Run: python client_config.py to setup\n")
+    default_host = 'localhost'
+    print("Using default host: localhost")
     
     # Nhập host (or use default)
     host_input = input(f"Server IP [{default_host}]: ").strip()

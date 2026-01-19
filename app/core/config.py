@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()
+# Ensure .env is loaded from project root even if server is started elsewhere
+BASE_DIR = Path(__file__).resolve().parents[2]
+ENV_PATH = BASE_DIR / ".env"
+load_dotenv(dotenv_path=ENV_PATH)
 
 class Settings:
     # Application
@@ -42,6 +46,13 @@ class Settings:
     # SSL
     SSL_CERT_FILE: str = os.getenv("SSL_CERT_FILE", "ssl_certs/server.crt")
     SSL_KEY_FILE: str = os.getenv("SSL_KEY_FILE", "ssl_certs/server.key")
+
+    # Radio (Multicast) - Live audio settings
+    RADIO_SOURCE: str = os.getenv("RADIO_SOURCE", "mic")  # mic | wav | dummy | auto
+    RADIO_SAMPLE_RATE: int = int(os.getenv("RADIO_SAMPLE_RATE", "16000"))
+    RADIO_CHANNELS: int = int(os.getenv("RADIO_CHANNELS", "1"))
+    RADIO_SAMPLE_WIDTH: int = int(os.getenv("RADIO_SAMPLE_WIDTH", "2"))  # bytes (int16)
+    RADIO_CHUNK_FRAMES: int = int(os.getenv("RADIO_CHUNK_FRAMES", "1024"))
     
     # Dev: allow a debug endpoint to return token claims (set to 'true' to enable)
     DEBUG_TOKEN_ENDPOINT: bool = os.getenv("DEBUG_TOKEN_ENDPOINT", "false").lower() in ("1", "true", "yes")

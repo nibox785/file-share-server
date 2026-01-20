@@ -54,6 +54,8 @@ def ensure_sqlite_indexes():
         "CREATE INDEX IF NOT EXISTS idx_files_file_type ON files (file_type)",
         "CREATE INDEX IF NOT EXISTS idx_files_download_count ON files (download_count)",
         "CREATE INDEX IF NOT EXISTS idx_files_original_filename ON files (original_filename)",
+        "CREATE INDEX IF NOT EXISTS idx_file_shares_file_id ON file_shares (file_id)",
+        "CREATE INDEX IF NOT EXISTS idx_file_shares_shared_with ON file_shares (shared_with_user_id)",
     ]
     with engine.begin() as conn:
         for stmt in index_statements:

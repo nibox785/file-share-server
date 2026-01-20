@@ -15,6 +15,7 @@ from app.api import auth, file_manager, streaming, admin
 from app.network.tcp_server import start_tcp_server
 from app.network.multicast_server import start_multicast_server
 from app.network.grpc_server import start_grpc_server
+from app.network.voice_server import start_voice_server
 
 # Tạo database tables
 base.Base.metadata.create_all(bind=engine)
@@ -57,7 +58,8 @@ def root():
             "tcp_server": f"{settings.TCP_HOST}:{settings.TCP_PORT}",
             "tcp_ssl_server": f"{settings.TCP_HOST}:{settings.TCP_SSL_PORT}",
             "multicast_radio": f"{settings.MULTICAST_GROUP}:{settings.MULTICAST_PORT}",
-            "grpc_server": f"localhost:{settings.GRPC_PORT}"
+            "grpc_server": f"localhost:{settings.GRPC_PORT}",
+            "voice_call": f"{settings.TCP_HOST}:{settings.VOICE_PORT}"
         },
         "docs": "http://localhost:8000/docs"
     }
@@ -126,6 +128,14 @@ def startup_event():
     )
     grpc_thread.start()
     print("gRPC Server thread started")
+
+    # 5. Voice Call Server - Thread 5
+    voice_thread = threading.Thread(
+        target=start_voice_server,
+        daemon=True
+    )
+    voice_thread.start()
+    print("Voice Call Server thread started")
     
     print("\n" + "="*70)
     print("All services started successfully!")
@@ -141,6 +151,7 @@ def startup_event():
     print(f"   - TCP SSL Transfer:  {server_ip}:9001")
     print(f"   - Multicast Radio:   {settings.MULTICAST_GROUP}:{settings.MULTICAST_PORT}")
     print(f"   - gRPC Search:       {server_ip}:{settings.GRPC_PORT}")
+    print(f"   - Voice Call:        {server_ip}:{settings.VOICE_PORT}")
     print()
     print("Share this IP with clients: " + "="*20)
     print(f"   SERVER_IP = {server_ip}")

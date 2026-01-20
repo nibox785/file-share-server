@@ -32,6 +32,13 @@ class Settings:
     MULTICAST_PORT: int = int(os.getenv("MULTICAST_PORT", "5007"))
     
     GRPC_PORT: int = int(os.getenv("GRPC_PORT", "50051"))
+
+    # Voice call (TCP relay)
+    VOICE_PORT: int = int(os.getenv("VOICE_PORT", "6000"))
+    VOICE_SAMPLE_RATE: int = int(os.getenv("VOICE_SAMPLE_RATE", "16000"))
+    VOICE_CHANNELS: int = int(os.getenv("VOICE_CHANNELS", "1"))
+    VOICE_SAMPLE_WIDTH: int = int(os.getenv("VOICE_SAMPLE_WIDTH", "2"))
+    VOICE_CHUNK_FRAMES: int = int(os.getenv("VOICE_CHUNK_FRAMES", "1024"))
     
     # Email
     SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")

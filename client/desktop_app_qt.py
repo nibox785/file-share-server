@@ -46,6 +46,7 @@ sys.path.append(ROOT_DIR)
 
 from client.tcp_client import TCPFileClient
 from client.multicast_client import MulticastRadioClient
+from client.voice_client import VoiceCallClient
 from app.grpc_files import file_search_pb2, file_search_pb2_grpc
 
 
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self._workers: List[Worker] = []
         self._radio_client: MulticastRadioClient | None = None
         self._admin_username = "admin"
+        self._voice_client: VoiceCallClient | None = None
         self._known_file_ids: set[int] = set()
         self._files_loaded = False
         self._auto_refresh_timer = QTimer(self)
@@ -108,6 +110,7 @@ class MainWindow(QMainWindow):
         self.tcp_port_input = QLineEdit("9000")
         self.tcp_ssl_port_input = QLineEdit("9001")
         self.grpc_port_input = QLineEdit("50051")
+        self.voice_port_input = QLineEdit("6000")
         self.ssl_checkbox = QCheckBox("Use SSL (TCP)")
 
         self.username_input = QLineEdit()
@@ -127,7 +130,9 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.tcp_ssl_port_input, 0, 7)
         header_layout.addWidget(QLabel("gRPC"), 0, 8)
         header_layout.addWidget(self.grpc_port_input, 0, 9)
-        header_layout.addWidget(self.ssl_checkbox, 0, 10)
+        header_layout.addWidget(QLabel("Voice"), 0, 10)
+        header_layout.addWidget(self.voice_port_input, 0, 11)
+        header_layout.addWidget(self.ssl_checkbox, 0, 12)
 
         header_layout.addWidget(QLabel("Username"), 1, 0)
         header_layout.addWidget(self.username_input, 1, 1, 1, 3)
@@ -144,16 +149,19 @@ class MainWindow(QMainWindow):
         self.files_tab = QWidget()
         self.search_tab = QWidget()
         self.radio_tab = QWidget()
+        self.voice_tab = QWidget()
         self.admin_tab = QWidget()
         self.tabs.addTab(self.files_tab, "Files")
         self.tabs.addTab(self.search_tab, "Search")
         self.tabs.addTab(self.radio_tab, "Radio")
+        self.tabs.addTab(self.voice_tab, "Call")
         # Admin tab is added only for admin users
         self.admin_tab_index = -1
 
         self._build_files_tab()
         self._build_search_tab()
         self._build_radio_tab()
+        self._build_voice_tab()
         self._build_admin_tab()
         # Ensure Admin tab is hidden until verified by login
         self._set_admin_tab_visible(False)
@@ -173,10 +181,21 @@ class MainWindow(QMainWindow):
         download_btn = QPushButton("Download (TCP)")
         download_btn.clicked.connect(self.download_file)
         self.public_checkbox = QCheckBox("Public")
+        self.share_user_input = QLineEdit()
+        self.share_user_input.setPlaceholderText("Share to username")
+        share_btn = QPushButton("Share")
+        share_btn.clicked.connect(self.share_file_to_user)
+        self.my_files_count_label = QLabel("My files: 0")
+        self.total_files_count_label = QLabel("All files: 0")
+        self.total_files_count_label.setVisible(False)
         toolbar.addWidget(refresh_btn)
         toolbar.addWidget(upload_btn)
         toolbar.addWidget(download_btn)
         toolbar.addWidget(self.public_checkbox)
+        toolbar.addWidget(self.share_user_input)
+        toolbar.addWidget(share_btn)
+        toolbar.addWidget(self.my_files_count_label)
+        toolbar.addWidget(self.total_files_count_label)
         toolbar.addStretch()
 
         layout.addLayout(toolbar)
@@ -240,6 +259,35 @@ class MainWindow(QMainWindow):
         self.radio_log = QTextEdit()
         self.radio_log.setReadOnly(True)
         layout.addWidget(self.radio_log)
+
+    def _build_voice_tab(self):
+        layout = QVBoxLayout(self.voice_tab)
+
+        form = QFormLayout()
+        self.voice_room_input = QLineEdit("room1")
+        self.voice_mic_checkbox = QCheckBox("Mic On")
+        self.voice_mic_checkbox.setChecked(True)
+        self.voice_speaker_checkbox = QCheckBox("Speaker On")
+        self.voice_speaker_checkbox.setChecked(True)
+
+        form.addRow("Room", self.voice_room_input)
+        form.addRow(self.voice_mic_checkbox, self.voice_speaker_checkbox)
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        self.voice_start_btn = QPushButton("Start Call")
+        self.voice_stop_btn = QPushButton("Stop Call")
+        self.voice_stop_btn.setEnabled(False)
+        self.voice_start_btn.clicked.connect(self.start_voice_call)
+        self.voice_stop_btn.clicked.connect(self.stop_voice_call)
+        btn_row.addWidget(self.voice_start_btn)
+        btn_row.addWidget(self.voice_stop_btn)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        self.voice_log = QTextEdit()
+        self.voice_log.setReadOnly(True)
+        layout.addWidget(self.voice_log)
 
     def _build_admin_tab(self):
         layout = QVBoxLayout(self.admin_tab)
@@ -379,8 +427,11 @@ class MainWindow(QMainWindow):
         is_admin = is_admin and (username == self._admin_username)
         self._set_admin_tab_visible(False)
         self._set_admin_tab_visible(is_admin)
+        self.total_files_count_label.setVisible(is_admin)
         self._auto_refresh_timer.start()
         self.refresh_files()
+        if is_admin:
+            self._refresh_admin_file_count()
 
     def logout(self):
         self.token = None
@@ -392,7 +443,11 @@ class MainWindow(QMainWindow):
         self._set_status("Not logged in")
         self.login_btn.setText("Login")
         self._set_admin_tab_visible(False)
+        self.total_files_count_label.setVisible(False)
+        self.my_files_count_label.setText("My files: 0")
+        self.total_files_count_label.setText("All files: 0")
         self._auto_refresh_timer.stop()
+        self.stop_voice_call()
 
     def refresh_files(self):
         if not self._require_login():
@@ -415,6 +470,8 @@ class MainWindow(QMainWindow):
             on_result=self._render_files,
             on_error=lambda e: self._show_error("Files", e)
         )
+        if self.user_info and self._parse_admin_flag(self.user_info.get("is_admin")):
+            self._refresh_admin_file_count()
 
     def _auto_refresh_files(self):
         if not self.token:
@@ -465,6 +522,30 @@ class MainWindow(QMainWindow):
             names = [f.get("original_filename", "") for f in new_files][:5]
             extra = "" if len(new_files) <= 5 else f"\n(+{len(new_files) - 5} more)"
             QMessageBox.information(self, "New files", "Có file mới được gửi:\n" + "\n".join(names) + extra)
+
+        self.my_files_count_label.setText(f"My files: {len(files)}")
+
+    def _refresh_admin_file_count(self):
+        if not self._require_admin():
+            return
+
+        def do_fetch():
+            url = f"{self._api_base()}/api/v1/admin/files"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to fetch files"))
+            if not data.get("success"):
+                raise RuntimeError(data.get("message", "Failed to fetch files"))
+            return len(data.get("data", []))
+
+        worker = Worker(do_fetch)
+        self._start_worker(
+            worker,
+            on_result=lambda count: self.total_files_count_label.setText(f"All files: {count}"),
+            on_error=lambda e: None
+        )
 
     def upload_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select file to upload")
@@ -555,6 +636,44 @@ class MainWindow(QMainWindow):
             on_error=lambda e: self._show_error("Download", e)
         )
 
+    def share_file_to_user(self):
+        if not self._require_login():
+            return
+
+        row = self.files_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Share", "Select a file first")
+            return
+
+        username = self.share_user_input.text().strip()
+        if not username:
+            QMessageBox.warning(self, "Share", "Enter username to share")
+            return
+
+        file_item = self.files_cache[row]
+        file_id = file_item.get("id")
+        if not file_id:
+            QMessageBox.warning(self, "Share", "Invalid file")
+            return
+
+        def do_share():
+            url = f"{self._api_base()}/api/v1/files/{file_id}/share-user"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.post(url, headers=headers, json={"username": username}, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Share failed"))
+            if not data.get("success"):
+                raise RuntimeError(data.get("message", "Share failed"))
+            return username
+
+        worker = Worker(do_share)
+        self._start_worker(
+            worker,
+            on_result=lambda u: QMessageBox.information(self, "Share", f"Đã chia sẻ file cho {u}"),
+            on_error=lambda e: self._show_error("Share", e)
+        )
+
     def search_files(self):
         keyword = self.search_input.text().strip()
         if not keyword:
@@ -635,6 +754,55 @@ class MainWindow(QMainWindow):
         self._radio_client = None
         self._radio_worker = None
         self.radio_stop_btn.setEnabled(False)
+
+    def start_voice_call(self):
+        if self._voice_client is not None:
+            QMessageBox.information(self, "Call", "Voice call is already running")
+            return
+
+        if not self._require_login():
+            return
+
+        host = self.host_input.text().strip()
+        try:
+            port = int(self.voice_port_input.text().strip())
+        except Exception:
+            QMessageBox.warning(self, "Call", "Invalid voice port")
+            return
+
+        room = self.voice_room_input.text().strip() or "room1"
+        username = self.user_info.get("username") if self.user_info else "user"
+
+        self._voice_client = VoiceCallClient(
+            host=host,
+            port=port,
+            room=room,
+            username=username,
+            play_audio=self.voice_speaker_checkbox.isChecked(),
+            capture_audio=self.voice_mic_checkbox.isChecked(),
+        )
+        try:
+            self._voice_client.start()
+        except Exception as exc:
+            self._voice_client = None
+            self._show_error("Call", exc)
+            return
+
+        self.voice_start_btn.setEnabled(False)
+        self.voice_stop_btn.setEnabled(True)
+        self.voice_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] Joined room: {room}\n")
+
+    def stop_voice_call(self):
+        if self._voice_client is None:
+            return
+        try:
+            self._voice_client.stop()
+        except Exception:
+            pass
+        self._voice_client = None
+        self.voice_start_btn.setEnabled(True)
+        self.voice_stop_btn.setEnabled(False)
+        self.voice_log.append(f"[{datetime.now().strftime('%H:%M:%S')}] Call stopped\n")
 
     def _set_admin_tab_visible(self, visible: bool):
         # Remove any existing Admin tab by title (safety)

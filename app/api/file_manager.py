@@ -10,6 +10,7 @@ import mimetypes
 
 from app.db.session import get_db
 from app.models.file import File as FileModel
+from app.models.file_share import FileShare
 from app.models.user import User
 from app.schemas.file import FileOut, FileUploadResponse, FileSearchResult
 from app.schemas.common import StandardResponse
@@ -28,6 +29,10 @@ class FileRegisterRequest(BaseModel):
     file_size: int
     description: Optional[str] = None
     is_public: bool = False
+
+
+class ShareUserRequest(BaseModel):
+    username: str
 
 
 @router.post("/register", response_model=StandardResponse[FileOut])
@@ -204,10 +209,15 @@ async def download_file_http(
     
     # Check permission
     if not file_record.is_public and file_record.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bạn không có quyền tải file này"
-        )
+        shared = db.query(FileShare).filter(
+            FileShare.file_id == file_record.id,
+            FileShare.shared_with_user_id == current_user.id
+        ).first()
+        if not shared:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền tải file này"
+            )
     
     # Check file exists on disk
     if not os.path.exists(file_record.file_path):
@@ -261,9 +271,13 @@ def list_files(
     elif only_public:
         query = query.filter(FileModel.is_public == True)
     else:
-        # Show: own files + public files
+        # Show: own files + public files + shared files
         query = query.filter(
-            (FileModel.owner_id == current_user.id) | (FileModel.is_public == True)
+            (FileModel.owner_id == current_user.id)
+            | (FileModel.is_public == True)
+            | (FileModel.id.in_(
+                db.query(FileShare.file_id).filter(FileShare.shared_with_user_id == current_user.id)
+            ))
         )
     
     # Search by filename
@@ -323,10 +337,15 @@ def get_file_info(
     
     # Check permission
     if not file_record.is_public and file_record.owner_id != current_user.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Bạn không có quyền xem file này"
-        )
+        shared = db.query(FileShare).filter(
+            FileShare.file_id == file_record.id,
+            FileShare.shared_with_user_id == current_user.id
+        ).first()
+        if not shared:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Bạn không có quyền xem file này"
+            )
     
     return StandardResponse(
         success=True,
@@ -440,6 +459,56 @@ async def share_file(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Lỗi khi gửi email: {str(e)}"
         )
+
+# ============================================================================
+# NGHIỆP VỤ 6B: SHARE FILE WITH USER (Chia sẻ file theo username)
+# ============================================================================
+
+@router.post("/{file_id}/share-user", response_model=StandardResponse)
+def share_file_with_user(
+    file_id: int,
+    payload: ShareUserRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    file_record = db.query(FileModel).filter(FileModel.id == file_id).first()
+    if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File không tồn tại"
+        )
+
+    if file_record.owner_id != current_user.id and not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bạn không có quyền chia sẻ file này"
+        )
+
+    target_user = db.query(User).filter(User.username == payload.username).first()
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User không tồn tại"
+        )
+
+    exists = db.query(FileShare).filter(
+        FileShare.file_id == file_record.id,
+        FileShare.shared_with_user_id == target_user.id
+    ).first()
+    if not exists:
+        share = FileShare(
+            file_id=file_record.id,
+            shared_with_user_id=target_user.id,
+            shared_by_user_id=current_user.id
+        )
+        db.add(share)
+        db.commit()
+
+    return StandardResponse(
+        success=True,
+        message="Đã chia sẻ file",
+        data=None
+    )
 
 # ============================================================================
 # NGHIỆP VỤ 7: UPDATE FILE METADATA (Cập nhật thông tin file)

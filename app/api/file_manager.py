@@ -240,6 +240,7 @@ def list_files(
     sort_by: str = Query("newest", enum=["newest", "oldest", "largest", "smallest", "most_downloaded"]),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    include_total: bool = Query(False, description="Có tính tổng số file hay không"),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -289,8 +290,8 @@ def list_files(
         query = query.order_by(FileModel.download_count.desc())
     
     # Pagination
-    total = query.count()
     files = query.offset(skip).limit(limit).all()
+    total = query.count() if include_total else len(files)
     
     return StandardResponse(
         success=True,

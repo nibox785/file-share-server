@@ -17,9 +17,11 @@ class Settings:
     SECRET_KEY: str = os.getenv("SECRET_KEY", "laptrinhmang").strip()
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256").strip()
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin").strip()
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./network_app.db")
+    DB_ECHO: bool = os.getenv("DB_ECHO", "false").lower() in ("1", "true", "yes")
     
     # Network Settings
     TCP_HOST: str = os.getenv("TCP_HOST", "0.0.0.0")

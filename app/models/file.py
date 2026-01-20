@@ -7,23 +7,23 @@ class File(Base):
     __tablename__ = "files"
     
     id = Column(Integer, primary_key=True, index=True)
-    filename = Column(String(255), nullable=False)
-    original_filename = Column(String(255), nullable=False)
+    filename = Column(String(255), nullable=False, index=True)
+    original_filename = Column(String(255), nullable=False, index=True)
     file_path = Column(String(500), nullable=False)
-    file_size = Column(BigInteger, nullable=False)  # Size in bytes
-    file_type = Column(String(50), nullable=False)  # Extension: .pdf, .jpg, etc
+    file_size = Column(BigInteger, nullable=False, index=True)  # Size in bytes
+    file_type = Column(String(50), nullable=False, index=True)  # Extension: .pdf, .jpg, etc
     mime_type = Column(String(100), nullable=True)
     
     # Metadata
     description = Column(String(500), nullable=True)
-    is_public = Column(Boolean, default=False)  # Public or private file
-    download_count = Column(Integer, default=0)
+    is_public = Column(Boolean, default=False, index=True)  # Public or private file
+    download_count = Column(Integer, default=0, index=True)
     
     # Timestamps
-    uploaded_at = Column(DateTime, default=datetime.utcnow)
+    uploaded_at = Column(DateTime, default=datetime.utcnow, index=True)
     
     # Foreign key
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     
     # Relationship
     owner = relationship("User", back_populates="files")

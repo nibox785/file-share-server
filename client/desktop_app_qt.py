@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Tuple
 
 import httpx
 import grpc
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QFileDialog,
+    QProgressBar,
 )
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -77,7 +78,17 @@ class MainWindow(QMainWindow):
         self.files_cache: List[Dict[str, Any]] = []
         self._workers: List[Worker] = []
         self._radio_client: MulticastRadioClient | None = None
+        self._admin_username = "admin"
+        self._known_file_ids: set[int] = set()
+        self._files_loaded = False
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(10000)
+        self._auto_refresh_timer.timeout.connect(self._auto_refresh_files)
         self._radio_worker: Worker | None = None
+        self._progress_value = 0
+        self.admin_users_cache: List[Dict[str, Any]] = []
+        self.admin_files_cache: List[Dict[str, Any]] = []
+        self._admin_tab_visible = False
 
         self._build_ui()
 
@@ -127,19 +138,25 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(header)
 
         # Tabs
-        tabs = QTabWidget()
-        root_layout.addWidget(tabs)
+        self.tabs = QTabWidget()
+        root_layout.addWidget(self.tabs)
 
         self.files_tab = QWidget()
         self.search_tab = QWidget()
         self.radio_tab = QWidget()
-        tabs.addTab(self.files_tab, "Files")
-        tabs.addTab(self.search_tab, "Search")
-        tabs.addTab(self.radio_tab, "Radio")
+        self.admin_tab = QWidget()
+        self.tabs.addTab(self.files_tab, "Files")
+        self.tabs.addTab(self.search_tab, "Search")
+        self.tabs.addTab(self.radio_tab, "Radio")
+        # Admin tab is added only for admin users
+        self.admin_tab_index = -1
 
         self._build_files_tab()
         self._build_search_tab()
         self._build_radio_tab()
+        self._build_admin_tab()
+        # Ensure Admin tab is hidden until verified by login
+        self._set_admin_tab_visible(False)
 
         # Status bar
         self.status_label = QLabel("Not logged in")
@@ -155,9 +172,11 @@ class MainWindow(QMainWindow):
         upload_btn.clicked.connect(self.upload_file)
         download_btn = QPushButton("Download (TCP)")
         download_btn.clicked.connect(self.download_file)
+        self.public_checkbox = QCheckBox("Public")
         toolbar.addWidget(refresh_btn)
         toolbar.addWidget(upload_btn)
         toolbar.addWidget(download_btn)
+        toolbar.addWidget(self.public_checkbox)
         toolbar.addStretch()
 
         layout.addLayout(toolbar)
@@ -166,6 +185,12 @@ class MainWindow(QMainWindow):
         self.files_table.setHorizontalHeaderLabels(["ID", "Original Name", "Size (KB)", "Owner", "Public"])
         self.files_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.files_table)
+
+        # Progress
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        layout.addWidget(self.progress_bar)
 
     def _build_search_tab(self):
         layout = QVBoxLayout(self.search_tab)
@@ -216,6 +241,52 @@ class MainWindow(QMainWindow):
         self.radio_log.setReadOnly(True)
         layout.addWidget(self.radio_log)
 
+    def _build_admin_tab(self):
+        layout = QVBoxLayout(self.admin_tab)
+
+        users_box = QGroupBox("Users")
+        users_layout = QVBoxLayout(users_box)
+        users_toolbar = QHBoxLayout()
+        self.admin_refresh_users_btn = QPushButton("Refresh Users")
+        self.admin_refresh_users_btn.clicked.connect(self.admin_refresh_users)
+        self.admin_toggle_active_btn = QPushButton("Toggle Active")
+        self.admin_toggle_active_btn.clicked.connect(self.admin_toggle_user_active)
+        self.admin_toggle_admin_btn = QPushButton("Toggle Admin")
+        self.admin_toggle_admin_btn.clicked.connect(self.admin_toggle_user_admin)
+        users_toolbar.addWidget(self.admin_refresh_users_btn)
+        users_toolbar.addWidget(self.admin_toggle_active_btn)
+        users_toolbar.addWidget(self.admin_toggle_admin_btn)
+        users_toolbar.addStretch()
+        users_layout.addLayout(users_toolbar)
+
+        self.users_table = QTableWidget(0, 5)
+        self.users_table.setHorizontalHeaderLabels(["ID", "Username", "Email", "Active", "Admin"])
+        self.users_table.horizontalHeader().setStretchLastSection(True)
+        users_layout.addWidget(self.users_table)
+
+        files_box = QGroupBox("All Files")
+        files_layout = QVBoxLayout(files_box)
+        files_toolbar = QHBoxLayout()
+        self.admin_refresh_files_btn = QPushButton("Refresh Files")
+        self.admin_refresh_files_btn.clicked.connect(self.admin_refresh_files)
+        self.admin_toggle_public_btn = QPushButton("Toggle Public")
+        self.admin_toggle_public_btn.clicked.connect(self.admin_toggle_file_public)
+        self.admin_delete_file_btn = QPushButton("Delete File")
+        self.admin_delete_file_btn.clicked.connect(self.admin_delete_file)
+        files_toolbar.addWidget(self.admin_refresh_files_btn)
+        files_toolbar.addWidget(self.admin_toggle_public_btn)
+        files_toolbar.addWidget(self.admin_delete_file_btn)
+        files_toolbar.addStretch()
+        files_layout.addLayout(files_toolbar)
+
+        self.admin_files_table = QTableWidget(0, 5)
+        self.admin_files_table.setHorizontalHeaderLabels(["ID", "Original Name", "Owner", "Size (KB)", "Public"])
+        self.admin_files_table.horizontalHeader().setStretchLastSection(True)
+        files_layout.addWidget(self.admin_files_table)
+
+        layout.addWidget(users_box)
+        layout.addWidget(files_box)
+
     # ------------------------------ Helpers ------------------------------
     def _api_base(self) -> str:
         host = self.host_input.text().strip()
@@ -235,6 +306,13 @@ class MainWindow(QMainWindow):
 
     def _set_status(self, text: str):
         self.status_label.setText(text)
+
+    def _set_progress(self, current: int, total: int):
+        if total <= 0:
+            self.progress_bar.setValue(0)
+            return
+        percent = int((current / total) * 100)
+        self.progress_bar.setValue(max(0, min(100, percent)))
 
     def _show_error(self, title: str, message: str):
         QMessageBox.critical(self, title, message)
@@ -297,14 +375,24 @@ class MainWindow(QMainWindow):
         username = self.user_info.get("username") if self.user_info else "user"
         self._set_status(f"Logged in as {username}")
         self.login_btn.setText("Logout")
+        is_admin = self._parse_admin_flag(self.user_info.get("is_admin") if self.user_info else None)
+        is_admin = is_admin and (username == self._admin_username)
+        self._set_admin_tab_visible(False)
+        self._set_admin_tab_visible(is_admin)
+        self._auto_refresh_timer.start()
+        self.refresh_files()
 
     def logout(self):
         self.token = None
         self.user_info = None
         self.files_cache = []
+        self._known_file_ids = set()
+        self._files_loaded = False
         self.files_table.setRowCount(0)
         self._set_status("Not logged in")
         self.login_btn.setText("Login")
+        self._set_admin_tab_visible(False)
+        self._auto_refresh_timer.stop()
 
     def refresh_files(self):
         if not self._require_login():
@@ -328,7 +416,36 @@ class MainWindow(QMainWindow):
             on_error=lambda e: self._show_error("Files", e)
         )
 
+    def _auto_refresh_files(self):
+        if not self.token:
+            return
+
+        def do_fetch():
+            url = f"{self._api_base()}/api/v1/files/"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to fetch files"))
+            if not data.get("success"):
+                raise RuntimeError(data.get("message", "Failed to fetch files"))
+            return data.get("data", [])
+
+        worker = Worker(do_fetch)
+        self._start_worker(
+            worker,
+            on_result=self._render_files,
+            on_error=lambda e: None
+        )
+
     def _render_files(self, files: List[Dict[str, Any]]):
+        new_files: List[Dict[str, Any]] = []
+        if self._files_loaded:
+            for f in files:
+                fid = f.get("id")
+                if fid is not None and fid not in self._known_file_ids:
+                    new_files.append(f)
+
         self.files_cache = files
         self.files_table.setRowCount(0)
         for f in files:
@@ -341,6 +458,14 @@ class MainWindow(QMainWindow):
             self.files_table.setItem(row, 3, QTableWidgetItem(str(f.get("owner_id"))))
             self.files_table.setItem(row, 4, QTableWidgetItem("Yes" if f.get("is_public") else "No"))
 
+        self._known_file_ids = {f.get("id") for f in files if f.get("id") is not None}
+        if not self._files_loaded:
+            self._files_loaded = True
+        elif new_files:
+            names = [f.get("original_filename", "") for f in new_files][:5]
+            extra = "" if len(new_files) <= 5 else f"\n(+{len(new_files) - 5} more)"
+            QMessageBox.information(self, "New files", "Có file mới được gửi:\n" + "\n".join(names) + extra)
+
     def upload_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select file to upload")
         if not path:
@@ -351,14 +476,17 @@ class MainWindow(QMainWindow):
             client = TCPFileClient(host=host, port=port, use_ssl=use_ssl)
             if not client.connect():
                 raise RuntimeError("Cannot connect to TCP server")
-            ok = client.upload_file(path)
+
+            def progress_cb(sent, total):
+                self._set_progress(sent, total)
+
+            ok = client.upload_file(path, progress_cb=progress_cb)
             client.close()
             if not ok:
                 raise RuntimeError("Upload failed")
             # Register metadata via HTTP so file appears in list
             filename = os.path.basename(path)
             file_size = os.path.getsize(path)
-            file_ext = os.path.splitext(filename)[1].lower()
             url = f"{self._api_base()}/api/v1/files/register"
             headers = {"Authorization": f"Bearer {self.token}"}
             payload = {
@@ -366,7 +494,7 @@ class MainWindow(QMainWindow):
                 "original_filename": filename,
                 "file_size": file_size,
                 "description": "",
-                "is_public": False,
+                "is_public": self.public_checkbox.isChecked(),
             }
             resp = httpx.post(url, headers=headers, json=payload, timeout=10)
             if resp.status_code != 200:
@@ -407,7 +535,11 @@ class MainWindow(QMainWindow):
             client = TCPFileClient(host=host, port=port, use_ssl=use_ssl)
             if not client.connect():
                 raise RuntimeError("Cannot connect to TCP server")
-            ok = client.download_file(filename_on_server, save_path)
+
+            def progress_cb(received, total):
+                self._set_progress(received, total)
+
+            ok = client.download_file(filename_on_server, save_path, progress_cb=progress_cb)
             client.close()
             if not ok:
                 raise RuntimeError("Download failed")
@@ -503,6 +635,187 @@ class MainWindow(QMainWindow):
         self._radio_client = None
         self._radio_worker = None
         self.radio_stop_btn.setEnabled(False)
+
+    def _set_admin_tab_visible(self, visible: bool):
+        # Remove any existing Admin tab by title (safety)
+        if not visible:
+            for i in range(self.tabs.count() - 1, -1, -1):
+                if self.tabs.tabText(i) == "Admin":
+                    self.tabs.removeTab(i)
+            self.admin_tab_index = -1
+            self._admin_tab_visible = False
+            return
+
+        if visible and not self._admin_tab_visible:
+            self.admin_tab_index = self.tabs.addTab(self.admin_tab, "Admin")
+            self._admin_tab_visible = True
+
+    def _parse_admin_flag(self, value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value == 1
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y"}
+        return False
+
+    # ------------------------------ Admin Actions ------------------------------
+    def _require_admin(self) -> bool:
+        if not self._require_login():
+            return False
+        username = self.user_info.get("username") if self.user_info else ""
+        if not self.user_info or not self._parse_admin_flag(self.user_info.get("is_admin")) or username != self._admin_username:
+            QMessageBox.warning(self, "Admin", "Bạn không có quyền admin")
+            return False
+        return True
+
+    def admin_refresh_users(self):
+        if not self._require_admin():
+            return
+
+        def do_fetch():
+            url = f"{self._api_base()}/api/v1/admin/users"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to fetch users"))
+            return data.get("data", [])
+
+        worker = Worker(do_fetch)
+        self._start_worker(worker, on_result=self._render_admin_users, on_error=lambda e: self._show_error("Admin", e))
+
+    def _render_admin_users(self, users: List[Dict[str, Any]]):
+        self.admin_users_cache = users
+        self.users_table.setRowCount(0)
+        for u in users:
+            row = self.users_table.rowCount()
+            self.users_table.insertRow(row)
+            self.users_table.setItem(row, 0, QTableWidgetItem(str(u.get("id"))))
+            self.users_table.setItem(row, 1, QTableWidgetItem(u.get("username", "")))
+            self.users_table.setItem(row, 2, QTableWidgetItem(u.get("email", "")))
+            self.users_table.setItem(row, 3, QTableWidgetItem("Yes" if u.get("is_active") else "No"))
+            self.users_table.setItem(row, 4, QTableWidgetItem("Yes" if u.get("is_admin") else "No"))
+
+    def admin_toggle_user_active(self):
+        if not self._require_admin():
+            return
+        row = self.users_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Admin", "Select a user")
+            return
+        user = self.admin_users_cache[row]
+        user_id = user.get("id")
+        new_active = not user.get("is_active")
+
+        def do_toggle():
+            url = f"{self._api_base()}/api/v1/admin/users/{user_id}/active"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.patch(url, headers=headers, json={"is_active": new_active}, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to update user"))
+            return True
+
+        worker = Worker(do_toggle)
+        self._start_worker(worker, on_result=lambda _: self.admin_refresh_users(), on_error=lambda e: self._show_error("Admin", e))
+
+    def admin_toggle_user_admin(self):
+        if not self._require_admin():
+            return
+        row = self.users_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Admin", "Select a user")
+            return
+        user = self.admin_users_cache[row]
+        user_id = user.get("id")
+        new_admin = not user.get("is_admin")
+
+        def do_toggle():
+            url = f"{self._api_base()}/api/v1/admin/users/{user_id}/admin"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.patch(url, headers=headers, json={"is_admin": new_admin}, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to update admin"))
+            return True
+
+        worker = Worker(do_toggle)
+        self._start_worker(worker, on_result=lambda _: self.admin_refresh_users(), on_error=lambda e: self._show_error("Admin", e))
+
+    def admin_refresh_files(self):
+        if not self._require_admin():
+            return
+
+        def do_fetch():
+            url = f"{self._api_base()}/api/v1/admin/files"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.get(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to fetch files"))
+            return data.get("data", [])
+
+        worker = Worker(do_fetch)
+        self._start_worker(worker, on_result=self._render_admin_files, on_error=lambda e: self._show_error("Admin", e))
+
+    def _render_admin_files(self, files: List[Dict[str, Any]]):
+        self.admin_files_cache = files
+        self.admin_files_table.setRowCount(0)
+        for f in files:
+            row = self.admin_files_table.rowCount()
+            self.admin_files_table.insertRow(row)
+            size_kb = float(f.get("file_size", 0)) / 1024
+            self.admin_files_table.setItem(row, 0, QTableWidgetItem(str(f.get("id"))))
+            self.admin_files_table.setItem(row, 1, QTableWidgetItem(f.get("original_filename", "")))
+            self.admin_files_table.setItem(row, 2, QTableWidgetItem(str(f.get("owner_id"))))
+            self.admin_files_table.setItem(row, 3, QTableWidgetItem(f"{size_kb:.1f}"))
+            self.admin_files_table.setItem(row, 4, QTableWidgetItem("Yes" if f.get("is_public") else "No"))
+
+    def admin_toggle_file_public(self):
+        if not self._require_admin():
+            return
+        row = self.admin_files_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Admin", "Select a file")
+            return
+        file = self.admin_files_cache[row]
+        file_id = file.get("id")
+        new_public = not file.get("is_public")
+
+        def do_toggle():
+            url = f"{self._api_base()}/api/v1/admin/files/{file_id}/public"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.patch(url, headers=headers, json={"is_public": new_public}, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to update file"))
+            return True
+
+        worker = Worker(do_toggle)
+        self._start_worker(worker, on_result=lambda _: self.admin_refresh_files(), on_error=lambda e: self._show_error("Admin", e))
+
+    def admin_delete_file(self):
+        if not self._require_admin():
+            return
+        row = self.admin_files_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Admin", "Select a file")
+            return
+        file = self.admin_files_cache[row]
+        file_id = file.get("id")
+
+        def do_delete():
+            url = f"{self._api_base()}/api/v1/admin/files/{file_id}"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.delete(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Failed to delete file"))
+            return True
+
+        worker = Worker(do_delete)
+        self._start_worker(worker, on_result=lambda _: self.admin_refresh_files(), on_error=lambda e: self._show_error("Admin", e))
 
 
 def main():

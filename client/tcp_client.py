@@ -12,10 +12,11 @@ class TCPFileClient:
         self.use_ssl = use_ssl
         self.socket = None
     
-    def connect(self):
+    def connect(self, timeout: float = 10.0):
         """Kết nối đến server"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(timeout)
             
             if self.use_ssl:
                 context = ssl.create_default_context()
@@ -33,7 +34,7 @@ class TCPFileClient:
             print(f"Connection error: {e}")
             return False
     
-    def upload_file(self, filepath):
+    def upload_file(self, filepath, progress_cb=None):
         """Upload file lên server"""
         try:
             if not os.path.exists(filepath):
@@ -67,7 +68,10 @@ class TCPFileClient:
                         break
                     self.socket.send(chunk)
                     sent += len(chunk)
-                    print(f"Progress: {sent}/{filesize} bytes ({sent*100//filesize}%)", end='\r')
+                    if progress_cb:
+                        progress_cb(sent, filesize)
+                    else:
+                        print(f"Progress: {sent}/{filesize} bytes ({sent*100//filesize}%)", end='\r')
             
             print()  # New line
             
@@ -84,7 +88,7 @@ class TCPFileClient:
             print(f"Upload error: {e}")
             return False
     
-    def download_file(self, filename, save_path=None):
+    def download_file(self, filename, save_path=None, progress_cb=None):
         """Download file từ server"""
         try:
             # Gửi request download
@@ -116,7 +120,10 @@ class TCPFileClient:
                         break
                     f.write(chunk)
                     received += len(chunk)
-                    print(f"Progress: {received}/{filesize} bytes ({received*100//filesize}%)", end='\r')
+                    if progress_cb:
+                        progress_cb(received, filesize)
+                    else:
+                        print(f"Progress: {received}/{filesize} bytes ({received*100//filesize}%)", end='\r')
             
             print()  # New line
             

@@ -5,11 +5,11 @@ import threading
 import os
 
 from app.core.config import settings
-from app.db.session import engine
+from app.db.session import engine, ensure_sqlite_indexes
 from app.db import base
 
 # Import routers
-from app.api import auth, file_manager, streaming
+from app.api import auth, file_manager, streaming, admin
 
 # Import network modules
 from app.network.tcp_server import start_tcp_server
@@ -18,6 +18,7 @@ from app.network.grpc_server import start_grpc_server
 
 # Tạo database tables
 base.Base.metadata.create_all(bind=engine)
+ensure_sqlite_indexes()
 
 # Khởi tạo FastAPI app
 app = FastAPI(
@@ -43,6 +44,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(auth.router, prefix=f"{settings.API_PREFIX}/auth", tags=["Authentication"])
 app.include_router(file_manager.router, prefix=f"{settings.API_PREFIX}/files", tags=["File Management"])
 app.include_router(streaming.router, prefix=f"{settings.API_PREFIX}/streaming", tags=["Streaming"])
+app.include_router(admin.router, prefix=f"{settings.API_PREFIX}/admin", tags=["Admin"])
 
 @app.get("/")
 def root():

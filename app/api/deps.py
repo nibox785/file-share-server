@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.core.security import decode_token
 from app.db.session import get_db
 from app.models.user import User
+from app.core.config import settings
 
 # OAuth2 scheme để lấy token từ header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/v1/auth/login")
@@ -52,7 +53,7 @@ def get_current_admin_user(
     """
     Dependency để kiểm tra user có quyền admin không.
     """
-    if not current_user.is_admin:
+    if not current_user.is_admin or current_user.username != settings.ADMIN_USERNAME:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Bạn không có quyền truy cập"

@@ -58,6 +58,7 @@ class Settings:
 
     # Radio (Multicast) - Live audio settings
     RADIO_SOURCE: str = os.getenv("RADIO_SOURCE", "mic")  # mic | wav | dummy | auto
+    RADIO_AUDIO_FILE: str = os.getenv("RADIO_AUDIO_FILE", "static/audio/sample.wav")
     RADIO_SAMPLE_RATE: int = int(os.getenv("RADIO_SAMPLE_RATE", "16000"))
     RADIO_CHANNELS: int = int(os.getenv("RADIO_CHANNELS", "1"))
     RADIO_SAMPLE_WIDTH: int = int(os.getenv("RADIO_SAMPLE_WIDTH", "2"))  # bytes (int16)

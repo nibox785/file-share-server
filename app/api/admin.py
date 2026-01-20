@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from app.schemas.common import StandardResponse
 from app.schemas.user import UserOut
 from app.schemas.file import FileOut
 from app.api.deps import get_current_admin_user
+from app.network.multicast_server import set_radio_source
 
 router = APIRouter()
 
@@ -25,6 +26,11 @@ class ToggleAdminRequest(BaseModel):
 
 class TogglePublicRequest(BaseModel):
     is_public: bool
+
+
+class RadioUploadResponse(BaseModel):
+    filename: str
+    file_path: str
 
 
 @router.get("/users", response_model=StandardResponse[List[UserOut]])
@@ -113,3 +119,41 @@ def delete_file_admin(
     db.delete(file)
     db.commit()
     return StandardResponse(success=True, message="Đã xóa file", data=None)
+
+
+@router.post("/radio/upload", response_model=StandardResponse[RadioUploadResponse])
+async def upload_radio_file(
+    file: UploadFile = File(...),
+    _: User = Depends(get_current_admin_user),
+):
+    if not file.filename.lower().endswith(".wav"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chỉ hỗ trợ file WAV"
+        )
+
+    audio_dir = os.path.join("static", "audio")
+    os.makedirs(audio_dir, exist_ok=True)
+    base_name = os.path.basename(file.filename)
+    target_path = os.path.join(audio_dir, base_name)
+
+    # Avoid overwrite
+    if os.path.exists(target_path):
+        name, ext = os.path.splitext(base_name)
+        target_path = os.path.join(audio_dir, f"{name}_{int(os.path.getmtime(target_path))}{ext}")
+
+    with open(target_path, "wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+
+    # Switch radio source to the new WAV
+    set_radio_source("wav", audio_file=target_path)
+
+    return StandardResponse(
+        success=True,
+        message="Đã cập nhật file phát radio",
+        data=RadioUploadResponse(filename=os.path.basename(target_path), file_path=target_path)
+    )

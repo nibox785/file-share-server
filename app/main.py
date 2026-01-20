@@ -39,6 +39,7 @@ app.add_middleware(
 
 # Mount static files
 os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(settings.RADIO_AUDIO_FILE), exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Include routers
@@ -115,7 +116,7 @@ def startup_event():
     # 3. Multicast Server - Thread 3
     multicast_thread = threading.Thread(
         target=start_multicast_server,
-        args=("static/audio/sample.mp3",),
+        args=(settings.RADIO_AUDIO_FILE,),
         daemon=True
     )
     multicast_thread.start()

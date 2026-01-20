@@ -332,8 +332,18 @@ class MainWindow(QMainWindow):
         self.admin_files_table.horizontalHeader().setStretchLastSection(True)
         files_layout.addWidget(self.admin_files_table)
 
+        radio_box = QGroupBox("Radio Broadcast")
+        radio_layout = QHBoxLayout(radio_box)
+        self.admin_radio_label = QLabel("Current: (auto)")
+        self.admin_radio_upload_btn = QPushButton("Upload Radio WAV")
+        self.admin_radio_upload_btn.clicked.connect(self.admin_upload_radio_file)
+        radio_layout.addWidget(self.admin_radio_upload_btn)
+        radio_layout.addWidget(self.admin_radio_label)
+        radio_layout.addStretch()
+
         layout.addWidget(users_box)
         layout.addWidget(files_box)
+        layout.addWidget(radio_box)
 
     # ------------------------------ Helpers ------------------------------
     def _api_base(self) -> str:
@@ -423,8 +433,7 @@ class MainWindow(QMainWindow):
         username = self.user_info.get("username") if self.user_info else "user"
         self._set_status(f"Logged in as {username}")
         self.login_btn.setText("Logout")
-        is_admin = self._parse_admin_flag(self.user_info.get("is_admin") if self.user_info else None)
-        is_admin = is_admin and (username == self._admin_username)
+        is_admin = self._is_admin_user()
         self._set_admin_tab_visible(False)
         self._set_admin_tab_visible(is_admin)
         self.total_files_count_label.setVisible(is_admin)
@@ -470,7 +479,7 @@ class MainWindow(QMainWindow):
             on_result=self._render_files,
             on_error=lambda e: self._show_error("Files", e)
         )
-        if self.user_info and self._parse_admin_flag(self.user_info.get("is_admin")):
+        if self._is_admin_user():
             self._refresh_admin_file_count()
 
     def _auto_refresh_files(self):
@@ -526,7 +535,7 @@ class MainWindow(QMainWindow):
         self.my_files_count_label.setText(f"My files: {len(files)}")
 
     def _refresh_admin_file_count(self):
-        if not self._require_admin():
+        if not self._is_admin_user():
             return
 
         def do_fetch():
@@ -546,6 +555,12 @@ class MainWindow(QMainWindow):
             on_result=lambda count: self.total_files_count_label.setText(f"All files: {count}"),
             on_error=lambda e: None
         )
+
+    def _is_admin_user(self) -> bool:
+        if not self.user_info:
+            return False
+        username = self.user_info.get("username") or ""
+        return self._parse_admin_flag(self.user_info.get("is_admin")) and username == self._admin_username
 
     def upload_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select file to upload")
@@ -984,6 +999,36 @@ class MainWindow(QMainWindow):
 
         worker = Worker(do_delete)
         self._start_worker(worker, on_result=lambda _: self.admin_refresh_files(), on_error=lambda e: self._show_error("Admin", e))
+
+    def admin_upload_radio_file(self):
+        if not self._require_admin():
+            return
+
+        path, _ = QFileDialog.getOpenFileName(self, "Select WAV file", "", "WAV Files (*.wav)")
+        if not path:
+            return
+
+        def do_upload():
+            url = f"{self._api_base()}/api/v1/admin/radio/upload"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            with open(path, "rb") as f:
+                files = {"file": (os.path.basename(path), f, "audio/wav")}
+                resp = httpx.post(url, headers=headers, files=files, timeout=30)
+                data = resp.json()
+                if resp.status_code != 200:
+                    raise RuntimeError(data.get("detail", "Upload failed"))
+                if not data.get("success"):
+                    raise RuntimeError(data.get("message", "Upload failed"))
+                return data.get("data", {})
+
+        worker = Worker(do_upload)
+        self._start_worker(
+            worker,
+            on_result=lambda d: (
+                self.admin_radio_label.setText(f"Current: {d.get('filename', '(updated)')}")
+            ),
+            on_error=lambda e: self._show_error("Admin", e)
+        )
 
 
 def main():

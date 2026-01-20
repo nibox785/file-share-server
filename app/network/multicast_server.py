@@ -3,6 +3,7 @@ import struct
 import time
 import os
 import wave
+import threading
 from app.core.config import settings
 
 try:
@@ -22,8 +23,12 @@ class MulticastRadioServer:
         self.port = port or settings.MULTICAST_PORT
         self.sock = None
         self.running = False
+        self.audio_file = settings.RADIO_AUDIO_FILE
+        self.source = settings.RADIO_SOURCE
+        self._lock = threading.Lock()
+        self._change_requested = False
     
-    def start(self, audio_file="static/audio/sample.wav", source: str = "auto"):
+    def start(self, audio_file: str = None, source: str = "auto"):
         """
         Bắt đầu phát audio qua multicast
         
@@ -40,29 +45,41 @@ class MulticastRadioServer:
             
             print(f"Multicast Radio Server started")
             print(f"   Group: {self.multicast_group}:{self.port}")
-            print(f"   Audio: {audio_file}")
+            if audio_file:
+                self.audio_file = audio_file
+            self.source = source or self.source
+            print(f"   Audio: {self.audio_file}")
             
             self.running = True
 
-            # Decide source
-            if source == "auto":
-                source = "mic" if HAS_SD else "wav"
+            while self.running:
+                with self._lock:
+                    source = self.source
+                    audio_file = self.audio_file
+                    self._change_requested = False
 
-            if source == "mic":
-                if not HAS_SD:
-                    print("sounddevice not available. Falling back to dummy stream.")
-                    self.stream_dummy_audio()
+                # Decide source
+                if source == "auto":
+                    source = "mic" if HAS_SD else "wav"
+
+                if source == "mic":
+                    if not HAS_SD:
+                        print("sounddevice not available. Falling back to dummy stream.")
+                        self.stream_dummy_audio()
+                    else:
+                        self.stream_microphone()
+                elif source == "wav":
+                    if not os.path.exists(audio_file):
+                        print(f"Audio file not found: {audio_file}")
+                        print("   Creating dummy audio stream...")
+                        self.stream_dummy_audio()
+                    else:
+                        self.stream_wav_file(audio_file)
                 else:
-                    self.stream_microphone()
-            elif source == "wav":
-                if not os.path.exists(audio_file):
-                    print(f"Audio file not found: {audio_file}")
-                    print("   Creating dummy audio stream...")
                     self.stream_dummy_audio()
-                else:
-                    self.stream_wav_file(audio_file)
-            else:
-                self.stream_dummy_audio()
+
+                if not self.running:
+                    break
                 
         except Exception as e:
             print(f"Multicast server error: {e}")
@@ -85,6 +102,8 @@ class MulticastRadioServer:
                 chunk_count = 0
 
                 while self.running:
+                    if self._change_requested:
+                        return
                     data = wf.readframes(chunk_frames)
                     if not data:
                         wf.rewind()
@@ -120,6 +139,8 @@ class MulticastRadioServer:
                 print("🎙️  Live microphone streaming started")
                 chunk_count = 0
                 while self.running:
+                    if self._change_requested:
+                        return
                     data, _ = stream.read(frames)
                     if data:
                         self.sock.sendto(data, (self.multicast_group, self.port))
@@ -135,6 +156,8 @@ class MulticastRadioServer:
             chunk_count = 0
             
             while self.running:
+                if self._change_requested:
+                    return
                 # Tạo dummy data (sine wave hoặc random)
                 dummy_data = b'\x00' * 1024  # 1KB of silence
                 
@@ -157,7 +180,25 @@ class MulticastRadioServer:
             self.sock.close()
             print("🛑 Multicast Radio Server stopped")
 
-def start_multicast_server(audio_file="static/audio/sample.mp3"):
+    def request_source(self, source: str, audio_file: str | None = None):
+        with self._lock:
+            if audio_file:
+                self.audio_file = audio_file
+            if source:
+                self.source = source
+            self._change_requested = True
+
+_RADIO_SERVER: MulticastRadioServer | None = None
+
+
+def start_multicast_server(audio_file: str = None):
     """Helper function để start multicast server"""
+    global _RADIO_SERVER
     server = MulticastRadioServer()
-    server.start(audio_file, source=settings.RADIO_SOURCE)
+    _RADIO_SERVER = server
+    server.start(audio_file or settings.RADIO_AUDIO_FILE, source=settings.RADIO_SOURCE)
+
+
+def set_radio_source(source: str, audio_file: str | None = None):
+    if _RADIO_SERVER:
+        _RADIO_SERVER.request_source(source, audio_file=audio_file)

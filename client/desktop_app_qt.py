@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
+import logging
+import faulthandler
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -44,6 +47,17 @@ from PyQt6.QtWidgets import (
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(ROOT_DIR)
 
+LOG_PATH = os.path.join(ROOT_DIR, "client_error.log")
+logging.basicConfig(
+    filename=LOG_PATH,
+    level=logging.ERROR,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+try:
+    faulthandler.enable(open(LOG_PATH, "a", buffering=1))
+except Exception:
+    pass
+
 from client.tcp_client import TCPFileClient
 from client.multicast_client import MulticastRadioClient
 from client.voice_client import VoiceCallClient
@@ -69,6 +83,8 @@ class Worker(QThread):
 
 
 class MainWindow(QMainWindow):
+    progress_signal = pyqtSignal(int, int)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("File Share Network - Desktop Client (PyQt6)")
@@ -91,6 +107,8 @@ class MainWindow(QMainWindow):
         self.admin_users_cache: List[Dict[str, Any]] = []
         self.admin_files_cache: List[Dict[str, Any]] = []
         self._admin_tab_visible = False
+
+        self.progress_signal.connect(self._set_progress)
 
         self._build_ui()
 
@@ -593,7 +611,7 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("Cannot connect to TCP server")
 
             def progress_cb(sent, total):
-                self._set_progress(sent, total)
+                self.progress_signal.emit(sent, total)
 
             ok = client.upload_file(path, progress_cb=progress_cb)
             client.close()
@@ -652,7 +670,7 @@ class MainWindow(QMainWindow):
                 raise RuntimeError("Cannot connect to TCP server")
 
             def progress_cb(received, total):
-                self._set_progress(received, total)
+                self.progress_signal.emit(received, total)
 
             ok = client.download_file(filename_on_server, save_path, progress_cb=progress_cb)
             client.close()
@@ -1104,6 +1122,19 @@ class MainWindow(QMainWindow):
 
 
 def main():
+    def _handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logging.error("Unhandled exception", exc_info=(exc_type, exc_value, exc_traceback))
+        msg = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        try:
+            QMessageBox.critical(None, "App Crash", f"Ứng dụng bị lỗi và sẽ tắt. Xem log: {LOG_PATH}\n\n{msg}")
+        except Exception:
+            pass
+
+    sys.excepthook = _handle_exception
+
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()

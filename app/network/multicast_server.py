@@ -4,6 +4,7 @@ import time
 import os
 import wave
 import threading
+import audioop
 from app.core.config import settings
 
 try:
@@ -100,6 +101,10 @@ class MulticastRadioServer:
 
                 chunk_frames = settings.RADIO_CHUNK_FRAMES
                 chunk_count = 0
+                rate_state = None
+                target_rate = settings.RADIO_SAMPLE_RATE
+                target_channels = settings.RADIO_CHANNELS
+                target_width = settings.RADIO_SAMPLE_WIDTH
 
                 while self.running:
                     if self._change_requested:
@@ -110,12 +115,40 @@ class MulticastRadioServer:
                         print("Looping audio...")
                         continue
 
-                    self.sock.sendto(data, (self.multicast_group, self.port))
+                    # Normalize WAV to configured output format (PCM int16, mono, target sample rate)
+                    out = data
+                    out_width = width
+                    out_channels = channels
+                    out_rate = rate
+
+                    if out_width != target_width:
+                        out = audioop.lin2lin(out, out_width, target_width)
+                        out_width = target_width
+
+                    if out_channels != target_channels:
+                        # Downmix to mono if needed
+                        out = audioop.tomono(out, out_width, 0.5, 0.5) if out_channels > 1 else out
+                        out_channels = target_channels
+
+                    if out_rate != target_rate:
+                        out, rate_state = audioop.ratecv(
+                            out,
+                            out_width,
+                            out_channels,
+                            out_rate,
+                            target_rate,
+                            rate_state,
+                        )
+                        out_rate = target_rate
+
+                    self.sock.sendto(out, (self.multicast_group, self.port))
                     chunk_count += 1
                     if chunk_count % 100 == 0:
                         print(f"Sent {chunk_count} chunks")
 
-                    time.sleep(chunk_frames / float(rate))
+                    # Sleep based on output frames to keep realtime pace
+                    out_frames = len(out) / float(out_width * out_channels) if out_width and out_channels else chunk_frames
+                    time.sleep(out_frames / float(out_rate))
         except Exception as e:
             print(f"Error streaming WAV audio: {e}")
 
@@ -199,6 +232,8 @@ def start_multicast_server(audio_file: str = None):
     server.start(audio_file or settings.RADIO_AUDIO_FILE, source=settings.RADIO_SOURCE)
 
 
-def set_radio_source(source: str, audio_file: str | None = None):
+def set_radio_source(source: str, audio_file: str | None = None) -> bool:
     if _RADIO_SERVER:
         _RADIO_SERVER.request_source(source, audio_file=audio_file)
+        return True
+    return False

@@ -165,6 +165,7 @@ class MainWindow(QMainWindow):
         self._build_admin_tab()
         # Ensure Admin tab is hidden until verified by login
         self._set_admin_tab_visible(False)
+        self._set_radio_admin_view(False)
 
         # Status bar
         self.status_label = QLabel("Not logged in")
@@ -230,6 +231,19 @@ class MainWindow(QMainWindow):
     def _build_radio_tab(self):
         layout = QVBoxLayout(self.radio_tab)
 
+        self.radio_admin_box = QGroupBox("Admin Broadcast")
+        admin_layout = QHBoxLayout(self.radio_admin_box)
+        self.radio_admin_upload_btn = QPushButton("Upload Radio WAV")
+        self.radio_admin_upload_btn.clicked.connect(self.admin_upload_radio_file)
+        self.radio_admin_start_btn = QPushButton("Start Broadcast")
+        self.radio_admin_start_btn.clicked.connect(self.admin_start_radio_broadcast)
+        self.radio_admin_label = QLabel("Current: (auto)")
+        admin_layout.addWidget(self.radio_admin_upload_btn)
+        admin_layout.addWidget(self.radio_admin_start_btn)
+        admin_layout.addWidget(self.radio_admin_label)
+        admin_layout.addStretch()
+        layout.addWidget(self.radio_admin_box)
+
         form = QFormLayout()
         self.radio_group_input = QLineEdit("224.1.1.1")
         self.radio_port_input = QLineEdit("5007")
@@ -247,9 +261,9 @@ class MainWindow(QMainWindow):
 
         layout.addLayout(form)
 
-        listen_btn = QPushButton("Start Listening")
-        listen_btn.clicked.connect(self.start_radio)
-        layout.addWidget(listen_btn)
+        self.radio_listen_btn = QPushButton("Start Listening")
+        self.radio_listen_btn.clicked.connect(self.start_radio)
+        layout.addWidget(self.radio_listen_btn)
 
         self.radio_stop_btn = QPushButton("Stop Listening")
         self.radio_stop_btn.setEnabled(False)
@@ -337,7 +351,10 @@ class MainWindow(QMainWindow):
         self.admin_radio_label = QLabel("Current: (auto)")
         self.admin_radio_upload_btn = QPushButton("Upload Radio WAV")
         self.admin_radio_upload_btn.clicked.connect(self.admin_upload_radio_file)
+        self.admin_radio_start_btn = QPushButton("Start Broadcast")
+        self.admin_radio_start_btn.clicked.connect(self.admin_start_radio_broadcast)
         radio_layout.addWidget(self.admin_radio_upload_btn)
+        radio_layout.addWidget(self.admin_radio_start_btn)
         radio_layout.addWidget(self.admin_radio_label)
         radio_layout.addStretch()
 
@@ -434,6 +451,7 @@ class MainWindow(QMainWindow):
         self._set_status(f"Logged in as {username}")
         self.login_btn.setText("Logout")
         is_admin = self._is_admin_user()
+        self._set_radio_admin_view(is_admin)
         self._set_admin_tab_visible(False)
         self._set_admin_tab_visible(is_admin)
         self.total_files_count_label.setVisible(is_admin)
@@ -451,6 +469,7 @@ class MainWindow(QMainWindow):
         self.files_table.setRowCount(0)
         self._set_status("Not logged in")
         self.login_btn.setText("Login")
+        self._set_radio_admin_view(False)
         self._set_admin_tab_visible(False)
         self.total_files_count_label.setVisible(False)
         self.my_files_count_label.setText("My files: 0")
@@ -833,6 +852,26 @@ class MainWindow(QMainWindow):
             self.admin_tab_index = self.tabs.addTab(self.admin_tab, "Admin")
             self._admin_tab_visible = True
 
+    def _set_radio_admin_view(self, is_admin: bool):
+        # Admin chỉ cần upload file radio, không cần thao tác nghe
+        if hasattr(self, "radio_admin_box"):
+            self.radio_admin_box.setVisible(is_admin)
+            self.radio_admin_box.setEnabled(is_admin)
+        if hasattr(self, "radio_admin_upload_btn"):
+            self.radio_admin_upload_btn.setEnabled(is_admin)
+
+        # Allow listening for both admin and normal users
+        for w in [
+            self.radio_group_input,
+            self.radio_port_input,
+            self.radio_duration_input,
+            self.radio_play_checkbox,
+            self.radio_save_checkbox,
+            self.radio_listen_btn,
+            self.radio_stop_btn,
+        ]:
+            w.setEnabled(True)
+
     def _parse_admin_flag(self, value: Any) -> bool:
         if isinstance(value, bool):
             return value
@@ -1024,11 +1063,44 @@ class MainWindow(QMainWindow):
         worker = Worker(do_upload)
         self._start_worker(
             worker,
-            on_result=lambda d: (
-                self.admin_radio_label.setText(f"Current: {d.get('filename', '(updated)')}")
-            ),
+            on_result=lambda d: self._update_radio_labels(d),
             on_error=lambda e: self._show_error("Admin", e)
         )
+
+    def admin_start_radio_broadcast(self):
+        if not self._require_admin():
+            return
+
+        def do_start():
+            url = f"{self._api_base()}/api/v1/admin/radio/start"
+            headers = {"Authorization": f"Bearer {self.token}"}
+            resp = httpx.post(url, headers=headers, timeout=10)
+            data = resp.json()
+            if resp.status_code != 200:
+                raise RuntimeError(data.get("detail", "Start broadcast failed"))
+            if not data.get("success"):
+                raise RuntimeError(data.get("message", "Start broadcast failed"))
+            return data.get("data", {})
+
+        def on_result(payload: Dict[str, Any]):
+            file_path = payload.get("file_path")
+            if file_path:
+                self._update_radio_labels({"filename": os.path.basename(file_path)})
+            QMessageBox.information(self, "Radio", "Đã bắt đầu phát radio")
+
+        worker = Worker(do_start)
+        self._start_worker(
+            worker,
+            on_result=on_result,
+            on_error=lambda e: self._show_error("Admin", e)
+        )
+
+    def _update_radio_labels(self, data: Dict[str, Any]):
+        label_text = f"Current: {data.get('filename', '(updated)')}"
+        if hasattr(self, "admin_radio_label"):
+            self.admin_radio_label.setText(label_text)
+        if hasattr(self, "radio_admin_label"):
+            self.radio_admin_label.setText(label_text)
 
 
 def main():

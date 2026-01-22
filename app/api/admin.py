@@ -12,6 +12,7 @@ from app.schemas.user import UserOut
 from app.schemas.file import FileOut
 from app.api.deps import get_current_admin_user
 from app.network.multicast_server import set_radio_source
+from app.core.config import settings
 
 router = APIRouter()
 
@@ -30,6 +31,11 @@ class TogglePublicRequest(BaseModel):
 
 class RadioUploadResponse(BaseModel):
     filename: str
+    file_path: str
+
+
+class RadioStartResponse(BaseModel):
+    source: str
     file_path: str
 
 
@@ -132,6 +138,23 @@ async def upload_radio_file(
             detail="Chỉ hỗ trợ file WAV"
         )
 
+    # Validate WAV header (RIFF/WAVE)
+    try:
+        header = await file.read(12)
+        if len(header) < 12 or header[:4] != b"RIFF" or header[8:12] != b"WAVE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="File không phải WAV chuẩn (RIFF/WAVE). Vui lòng convert sang WAV PCM"
+            )
+    finally:
+        try:
+            await file.seek(0)
+        except Exception:
+            try:
+                file.file.seek(0)
+            except Exception:
+                pass
+
     audio_dir = os.path.join("static", "audio")
     os.makedirs(audio_dir, exist_ok=True)
     base_name = os.path.basename(file.filename)
@@ -150,10 +173,33 @@ async def upload_radio_file(
             out.write(chunk)
 
     # Switch radio source to the new WAV
-    set_radio_source("wav", audio_file=target_path)
+    settings.RADIO_AUDIO_FILE = target_path
+    if not set_radio_source("wav", audio_file=target_path):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Radio server chưa sẵn sàng"
+        )
 
     return StandardResponse(
         success=True,
         message="Đã cập nhật file phát radio",
         data=RadioUploadResponse(filename=os.path.basename(target_path), file_path=target_path)
+    )
+
+
+@router.post("/radio/start", response_model=StandardResponse[RadioStartResponse])
+def start_radio_broadcast(
+    _: User = Depends(get_current_admin_user),
+):
+    audio_file = settings.RADIO_AUDIO_FILE
+    if not set_radio_source("wav", audio_file=audio_file):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Radio server chưa sẵn sàng"
+        )
+
+    return StandardResponse(
+        success=True,
+        message="Đã phát radio",
+        data=RadioStartResponse(source="wav", file_path=audio_file)
     )
